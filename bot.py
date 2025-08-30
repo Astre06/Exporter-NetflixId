@@ -510,7 +510,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Do not create a status message here
 # Progress message will be created inside process_files_in_parallel or process_files_in_batches
 
-        progress.status_message_id = status_msg.message_id
 
         # Run in parallel with workers
         if len(temp_files) <= 10:
@@ -629,5 +628,6 @@ if __name__ == "__main__":
     finally:
         # Cleanup worker pool
         worker_pool.stop()
+
 
 
