@@ -239,9 +239,6 @@ async def update_progress_message(context, force_update=False):
         return export_paths if export_paths else None
 
 
-    return asyncio.run(_process())
-
-
 # ========== Process Pool Management ==========
 class WorkerPool:
     def __init__(self, max_workers=WORKERS):
@@ -611,5 +608,6 @@ if __name__ == "__main__":
     finally:
         # Cleanup worker pool
         worker_pool.stop()
+
 
 
