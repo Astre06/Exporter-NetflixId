@@ -507,11 +507,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         progress.set_total(len(temp_files))
         progress.chat_id = update.effective_chat.id
 
-        status_msg = await update.message.reply_text(
-            f"🔄 **Processing {len(temp_files)} NetflixId lines...**",
-            parse_mode='Markdown',
-            reply_markup=create_status_keyboard(0, 0)
-        )
+# Do not create a status message here
+# Progress message will be created inside process_files_in_parallel or process_files_in_batches
+
         progress.status_message_id = status_msg.message_id
 
         # Run in parallel with workers
