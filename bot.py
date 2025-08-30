@@ -240,6 +240,7 @@ def process_cookie_file_worker(input_path):
 
                 await browser.close()
                 # live update after each NetflixId line
+                await update_progress_message(global_context, force_update=True)
 
         return export_paths if export_paths else None
 
@@ -495,25 +496,36 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await download_msg.edit_text("✅ **File downloaded successfully!**", parse_mode='Markdown')
 
     if file_ext == ".txt":
-        # Count total NetflixId lines
-        all_cookie_sets = parse_specific_cookie(downloaded_name, target_cookie="NetflixId")
-        total_ids = len(all_cookie_sets) if all_cookie_sets else 0
-        progress.set_total(total_ids)
+        # Split the .txt into one-line temp files
+        temp_files = []
+        with open(downloaded_name, "r", encoding="utf-8") as f:
+            for i, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                temp_name = f"temp_line_{i}.txt"
+                with open(temp_name, "w", encoding="utf-8") as temp_f:
+                    temp_f.write(line + "\n")
+                temp_files.append((temp_name, f"{document.file_name}_line{i}"))
 
-        
+        # Progress setup
+        progress.set_total(len(temp_files))
+        progress.chat_id = update.effective_chat.id
+
         status_msg = await update.message.reply_text(
-            "🔄 **Processing single cookie file...**",
+            f"🔄 **Processing {len(temp_files)} NetflixId lines...**",
             parse_mode='Markdown',
             reply_markup=create_status_keyboard(0, 0)
         )
         progress.status_message_id = status_msg.message_id
-        
-        exported_paths = await process_cookie_file(downloaded_name, context)
-        if exported_paths:
-            for path in exported_paths:
-                await send_result(update, path, document.file_name)
 
-        # Final status
+        # Run in parallel with workers
+        if len(temp_files) <= 10:
+            processed = await process_files_in_parallel(temp_files, update, context)
+        else:
+            processed = await process_files_in_batches(temp_files, update, context)
+
+        # Final summary
         final_text = (
             f"✅ **Processing Complete!**\n\n"
             f"📁 File: `{document.file_name}`\n"
@@ -523,8 +535,11 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await status_msg.edit_text(final_text, parse_mode='Markdown')
 
-        
+        # Cleanup
+        for fpath, _ in temp_files:
+            os.remove(fpath)
         os.remove(downloaded_name)
+
         
     else:
         extract_msg = await update.message.reply_text("📦 **Extracting archive...**", parse_mode='Markdown')
@@ -621,6 +636,5 @@ if __name__ == "__main__":
     finally:
         # Cleanup worker pool
         worker_pool.stop()
-
 
 
