@@ -277,14 +277,8 @@ class WorkerPool:
                 process_cookie_file_worker,
                 file_path
             )
-            # Update progress here in the main process
-            if result:
-                progress.increment_processed(is_valid=True)
-            else:
-                progress.increment_processed(is_valid=False)
-
-            await update_progress_message(context)  # update UI
             return result
+
         except Exception as e:
             logger.error(f"Worker process failed: {e}")
             return None
