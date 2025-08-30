@@ -189,6 +189,12 @@ async def update_progress_message(context, force_update=False):
             logger.warning(f"Failed to update progress message: {e}")
 
 # ========== Worker Process Function ==========
+def process_cookie_file_worker(input_path):
+    """Worker function that runs in separate process"""
+    import asyncio
+    from playwright.async_api import async_playwright
+
+    async def _process():
         try:
             all_cookie_sets = parse_specific_cookie(input_path, target_cookie="NetflixId")
             if not all_cookie_sets:
@@ -238,7 +244,7 @@ async def update_progress_message(context, force_update=False):
 
         return export_paths if export_paths else None
 
-
+    return asyncio.run(_process())
 
 # ========== Process Pool Management ==========
 class WorkerPool:
