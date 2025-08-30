@@ -239,6 +239,7 @@ async def update_progress_message(context, force_update=False):
         return export_paths if export_paths else None
 
 
+
 # ========== Process Pool Management ==========
 class WorkerPool:
     def __init__(self, max_workers=WORKERS):
@@ -289,9 +290,11 @@ async def process_cookie_file(input_path, context):
     """Main interface for processing cookie files using worker pool with concurrency control"""
     async with semaphore:
         result = await worker_pool.process_file(input_path)
-        progress.increment_processed(is_valid=(result is not None))
-        await update_progress_message(context)
+        if result:  # result is a list
+            for exported_path in result:
+                await send_result(update, exported_path, os.path.basename(input_path))
         return result
+
 
 async def send_result(update, exported_path, filename=None):
     """Send valid cookie file back to user"""
@@ -489,8 +492,11 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await download_msg.edit_text("✅ **File downloaded successfully!**", parse_mode='Markdown')
 
     if file_ext == ".txt":
-        progress.set_total(1)
-        progress.chat_id = update.effective_chat.id
+        # Count total NetflixId lines
+        all_cookie_sets = parse_specific_cookie(downloaded_name, target_cookie="NetflixId")
+        total_ids = len(all_cookie_sets) if all_cookie_sets else 0
+        progress.set_total(total_ids)
+
         
         status_msg = await update.message.reply_text(
             "🔄 **Processing single cookie file...**",
@@ -608,6 +614,5 @@ if __name__ == "__main__":
     finally:
         # Cleanup worker pool
         worker_pool.stop()
-
 
 
