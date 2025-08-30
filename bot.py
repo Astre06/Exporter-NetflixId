@@ -91,7 +91,7 @@ def next_export_filename(base="working", ext=".txt"):
 
 def parse_specific_cookie(file_path, target_cookie="NetflixId"):
     """
-    Read a cookie file and extract ALL cookies named `target_cookie`.
+    Read a cookie file and extract ALL NetflixId lines.
     Each line should be like:
     NetflixId=abcdef123456789
     """
@@ -109,7 +109,7 @@ def parse_specific_cookie(file_path, target_cookie="NetflixId"):
                         cookies.append([{
                             "name": target_cookie,
                             "value": value.strip(),
-                            "domain": "example.com",   # replace with Netflix domain if needed
+                            "domain": "example.com",   # replace with Netflix domain if you want
                             "path": "/",
                             "secure": True,
                             "httpOnly": False,
@@ -119,9 +119,6 @@ def parse_specific_cookie(file_path, target_cookie="NetflixId"):
     except Exception as e:
         logger.error(f"Failed to parse specific cookie: {e}")
         return None
-
-    
-    return cookies
 
 def create_status_keyboard(valid_count=0, invalid_count=0):
     """Create inline keyboard with status buttons"""
@@ -192,14 +189,6 @@ async def update_progress_message(context, force_update=False):
             logger.warning(f"Failed to update progress message: {e}")
 
 # ========== Worker Process Function ==========
-def process_cookie_file_worker(input_path):
-    """Worker function that runs in separate process"""
-    import asyncio
-    from playwright.async_api import async_playwright
-
-    async def _process():
-        logger.info(f"[Worker {os.getpid()}] Processing file: {input_path}")
-
         try:
             all_cookie_sets = parse_specific_cookie(input_path, target_cookie="NetflixId")
             if not all_cookie_sets:
@@ -221,6 +210,7 @@ def process_cookie_file_worker(input_path):
                 except Exception as e:
                     logger.warning(f"[Worker {os.getpid()}] Cookie inject failed: {e}")
                     await browser.close()
+                    progress.increment_processed(is_valid=False)
                     continue
 
                 page = await context.new_page()
@@ -228,27 +218,26 @@ def process_cookie_file_worker(input_path):
                 await page.wait_for_load_state("networkidle")
 
                 if page.url.startswith(TARGET_URL):
-                    logger.info(f"[Worker {os.getpid()}] ✅ Valid NetflixId")
-
                     new_cookies = await context.cookies()
                     if new_cookies:
-                        for cookie in new_cookies:
-                            if "sameSite" in cookie and isinstance(cookie["sameSite"], str):
-                                s = cookie["sameSite"].lower()
-                                mapping = {"lax": "lax", "strict": "strict", "none": "no_restriction"}
-                                cookie["sameSite"] = mapping.get(s, "lax")
-
                         export_path = next_export_filename()
                         with open(export_path, "w", encoding="utf-8") as f:
                             json.dump(new_cookies, f, separators=(",", ":"))
                         export_paths.append(export_path)
+                        progress.increment_processed(is_valid=True)
                         logger.info(f"[Worker {os.getpid()}] Exported cookies to {export_path}")
+                    else:
+                        progress.increment_processed(is_valid=False)
                 else:
                     logger.warning(f"[Worker {os.getpid()}] ❌ Invalid NetflixId")
+                    progress.increment_processed(is_valid=False)
 
                 await browser.close()
+                # live update after each NetflixId line
+                await update_progress_message(global_context, force_update=True)
 
         return export_paths if export_paths else None
+
 
     return asyncio.run(_process())
 
