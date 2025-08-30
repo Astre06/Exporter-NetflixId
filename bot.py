@@ -534,7 +534,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"❌ Invalid: {progress.invalid_files}\n"
             f"⏱️ Processing time: {time.time() - progress.start_time:.1f}s"
         )
-        await status_msg.edit_text(final_text, parse_mode='Markdown')
+        await update.message.reply_text(final_text, parse_mode='Markdown')
 
         # Cleanup
         for fpath, _ in temp_files:
