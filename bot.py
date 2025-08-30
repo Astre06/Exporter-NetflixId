@@ -290,10 +290,8 @@ async def process_cookie_file(input_path, context):
     """Main interface for processing cookie files using worker pool with concurrency control"""
     async with semaphore:
         result = await worker_pool.process_file(input_path)
-        if result:  # result is a list
-            for exported_path in result:
-                await send_result(update, exported_path, os.path.basename(input_path))
-        return result
+        return result  # just return list of export files
+
 
 
 async def send_result(update, exported_path, filename=None):
@@ -505,17 +503,21 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         progress.status_message_id = status_msg.message_id
         
-        exported_path = await process_cookie_file(downloaded_name, context)
-        await send_result(update, exported_path, document.file_name)
-        
+        exported_paths = await process_cookie_file(downloaded_name, context)
+        if exported_paths:
+            for path in exported_paths:
+                await send_result(update, path, document.file_name)
+
         # Final status
         final_text = (
             f"✅ **Processing Complete!**\n\n"
             f"📁 File: `{document.file_name}`\n"
-            f"📊 Result: {'Valid' if exported_path else 'Invalid'}\n"
+            f"📊 Valid: {progress.valid_files}\n"
+            f"❌ Invalid: {progress.invalid_files}\n"
             f"⏱️ Processing time: {time.time() - progress.start_time:.1f}s"
         )
         await status_msg.edit_text(final_text, parse_mode='Markdown')
+
         
         os.remove(downloaded_name)
         
