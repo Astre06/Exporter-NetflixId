@@ -408,8 +408,17 @@ async def process_files_in_batches(txt_files, update, context, batch_size=None):
         for result, (full_path, filename) in zip(batch_results, batch_info):
             if isinstance(result, Exception):
                 logger.error(f"Failed to process {filename}: {result}")
+                progress.increment_processed(is_valid=False)
             elif result:
                 await send_result(update, result, filename)
+                progress.increment_processed(is_valid=True)
+            else:
+                progress.increment_processed(is_valid=False)
+
+            # 🔧 Update progress after each file
+            await update_progress_message(context)
+
+
     
     # Final status update
     await update_progress_message(context, force_update=True)
