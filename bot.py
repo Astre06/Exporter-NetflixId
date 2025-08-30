@@ -240,7 +240,6 @@ def process_cookie_file_worker(input_path):
 
                 await browser.close()
                 # live update after each NetflixId line
-                await update_progress_message(global_context, force_update=True)
 
         return export_paths if export_paths else None
 
