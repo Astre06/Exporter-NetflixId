@@ -331,13 +331,9 @@ async def process_files_in_parallel(txt_files, update, context):
     progress.set_total(total_files)
     progress.chat_id = update.effective_chat.id
     
-    # Send initial progress message
-    status_msg = await update.message.reply_text(
-        "🚀 **Starting Processing...**\n\n📁 Initializing workers...",
-        parse_mode='Markdown',
-        reply_markup=create_status_keyboard(0, 0)
-    )
-    progress.status_message_id = status_msg.message_id
+# Do not create another status message here.
+# Progress message will be created inside process_files_in_parallel or process_files_in_batches
+
     
     if total_files == 1:
         # Single file - just process it
