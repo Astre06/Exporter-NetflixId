@@ -277,6 +277,13 @@ class WorkerPool:
                 process_cookie_file_worker,
                 file_path
             )
+            # Update progress here in the main process
+            if result:
+                progress.increment_processed(is_valid=True)
+            else:
+                progress.increment_processed(is_valid=False)
+
+            await update_progress_message(context)  # update UI
             return result
         except Exception as e:
             logger.error(f"Worker process failed: {e}")
@@ -510,7 +517,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Do not create a status message here
 # Progress message will be created inside process_files_in_parallel or process_files_in_batches
 
-
         # Run in parallel with workers
         if len(temp_files) <= 10:
             processed = await process_files_in_parallel(temp_files, update, context)
@@ -628,6 +634,5 @@ if __name__ == "__main__":
     finally:
         # Cleanup worker pool
         worker_pool.stop()
-
 
 
