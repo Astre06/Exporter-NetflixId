@@ -537,7 +537,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 temp_name = f"temp_line_{i}.txt"
                 with open(temp_name, "w", encoding="utf-8") as temp_f:
                     temp_f.write(line + "\n")
-                temp_files.append((temp_name, f"{document.file_name}_line{i}"))
+                # ✅ keep original file name, no extra .txt_line
+                temp_files.append((temp_name, document.file_name))
+
 
         # Run in parallel with workers
         if len(temp_files) <= 10:
@@ -655,4 +657,5 @@ if __name__ == "__main__":
         logger.info("Bot stopped by user")
     finally:
         worker_pool.stop()
+
 
